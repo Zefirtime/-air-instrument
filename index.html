@@ -118,6 +118,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--teal); out
 }
 .seg button {
   min-height: 34px;
+  padding: 0 13px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -175,6 +176,7 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
     <div class="seg" role="group" aria-label="Инструмент">
       <button type="button" id="mPiano" aria-pressed="true">Пианино</button>
       <button type="button" id="mStrings" aria-pressed="false">Струны</button>
+      <button type="button" id="mHarp" aria-pressed="false">Арфа</button>
     </div>
     <label class="sel" id="scaleWrap" for="scale" hidden>Лад
       <select id="scale">
@@ -194,6 +196,7 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
       <ol>
         <li><b>Пианино.</b> Клавиши висят сверху. Поднимите палец к клавише, чтобы нажать, и опустите, чтобы отпустить.</li>
         <li><b>Струны.</b> Проведите пальцами поперёк струн. Чем быстрее движение, тем громче звук.</li>
+        <li><b>Арфа.</b> Струны разной длины и мягкий долгий звук. Красные струны играют До, синие играют Фа.</li>
       </ol>
       <div class="row">
         <button type="button" id="startCam" class="primary">Включить камеру</button>
@@ -215,10 +218,10 @@ const MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarke
 const $ = id => document.getElementById(id);
 const stage = $('stage'), video = $('cam'), canvas = $('view'), g = canvas.getContext('2d');
 const statusEl = $('status'), bar = $('bar'), intro = $('intro');
-const mPiano = $('mPiano'), mStrings = $('mStrings'), scaleWrap = $('scaleWrap'), scaleSel = $('scale');
+const mPiano = $('mPiano'), mStrings = $('mStrings'), mHarp = $('mHarp'), scaleWrap = $('scaleWrap'), scaleSel = $('scale');
 const camBtn = $('camBtn'), flipBtn = $('flipBtn');
 
-const C = { ink: '#15121d', ivory: '#f4ecdd', brass: '#e7b052', teal: '#62d2c4' };
+const C = { ink: '#15121d', ivory: '#f4ecdd', brass: '#e7b052', teal: '#62d2c4', red: '#e8584d', blue: '#6f93e8', wood: '#b98a45' };
 const NOTE_RU = ['До', 'До♯', 'Ре', 'Ре♯', 'Ми', 'Фа', 'Фа♯', 'Соль', 'Соль♯', 'Ля', 'Ля♯', 'Си'];
 const TIP_IDS = [4, 8, 12, 16, 20];
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
@@ -318,17 +321,19 @@ function pianoOn(midi, vel) {
 }
 
 /* Plucked string (Karplus-Strong), rendered once per note and cached */
-function ksBuffer(midi) {
-  let e = ksCache.get(midi);
+function ksBuffer(midi, soft) {
+  const cacheKey = midi + (soft ? 's' : '');
+  let e = ksCache.get(cacheKey);
   if (e) return e;
   const sr = ac.sampleRate, f = mtof(midi);
   const N = Math.max(2, Math.round(sr / f - 0.5));
-  const t60 = clamp(4 * Math.pow(130 / f, 0.4), 1.5, 4.5);
+  const t60 = clamp((soft ? 5.4 : 4) * Math.pow(130 / f, 0.4), soft ? 2 : 1.5, soft ? 6 : 4.5);
+  const damp = soft ? 0.8 : 0.45;
   const loss = Math.exp(-6.9 / (f * t60));
   const len = Math.floor(sr * t60);
   const buf = ac.createBuffer(1, len, sr), d = buf.getChannelData(0), ring = new Float32Array(N);
   let prev = 0, mean = 0;
-  for (let i = 0; i < N; i++) { prev = prev * 0.45 + (Math.random() * 2 - 1) * 0.55; ring[i] = prev; mean += prev; }
+  for (let i = 0; i < N; i++) { prev = prev * damp + (Math.random() * 2 - 1) * (1 - damp); ring[i] = prev; mean += prev; }
   mean /= N;
   for (let i = 0; i < N; i++) ring[i] -= mean;
   let idx = 0, peak = 0;
@@ -342,7 +347,7 @@ function ksBuffer(midi) {
   const norm = peak > 0 ? 0.9 / peak : 1, fade = Math.floor(sr * 0.04);
   for (let i = 0; i < len; i++) d[i] *= norm * (i > len - fade ? (len - i) / fade : 1);
   e = { buf, rate: f * (N + 0.5) / sr };
-  ksCache.set(midi, e);
+  ksCache.set(cacheKey, e);
   return e;
 }
 
@@ -353,7 +358,7 @@ function pluck(i, vel, delay) {
   s.amp = Math.min(1, 0.4 + vel * 0.6);
   const a = audio();
   if (!a) return;
-  const kb = ksBuffer(s.midi);
+  const kb = ksBuffer(s.midi, s.soft);
   const src = a.createBufferSource();
   src.buffer = kb.buf; src.playbackRate.value = kb.rate;
   const gn = a.createGain(); gn.gain.value = 0.22 + vel * 0.6;
@@ -398,17 +403,35 @@ function hitKey(x, y) {
 }
 
 function buildStrings() {
+  sTop = Math.max(30, H * 0.07);
+  sBot = Math.max(sTop + 120, H - barH - 112);
+  strings = [];
+  if (mode === 'harp') {
+    /* Diatonic harp from C3: long bass strings by the column, short treble strings on the right */
+    const n = W < 620 ? 15 : W < 1000 ? 19 : 22, steps = [0, 2, 4, 5, 7, 9, 11];
+    const span = sBot - sTop, left = Math.max(40, W * 0.11), right = Math.max(22, W * 0.06);
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1), pc = steps[i % 7];
+      strings.push({
+        midi: 48 + 12 * Math.floor(i / 7) + pc,
+        x: left + (W - left - right) * u,
+        y1: sTop + span * (0.03 + 0.36 * u) - span * 0.05 * Math.sin(Math.PI * u),
+        y2: sBot - span * 0.34 * u,
+        color: pc === 0 ? C.red : pc === 5 ? C.blue : C.ivory,
+        soft: true, amp: 0, last: 0
+      });
+    }
+    return;
+  }
   const n = W < 620 ? 9 : W < 1000 ? 12 : 15;
   const sc = SCALES[scaleSel.value] || SCALES.penta;
   const base = n === 9 ? 55 : 48;
-  sTop = Math.max(30, H * 0.07);
-  sBot = Math.max(sTop + 120, H - barH - 112);
   const m = Math.max(26, W * 0.08);
-  strings = [];
   for (let i = 0; i < n; i++) {
     strings.push({
       midi: base + 12 * Math.floor(i / sc.length) + sc[i % sc.length],
       x: m + (W - 2 * m) * i / (n - 1),
+      y1: sTop, y2: sBot, color: C.brass, soft: false,
       amp: 0, last: 0
     });
   }
@@ -476,12 +499,11 @@ function processTip(t) {
     return;
   }
   const d = Math.max(5, W * 0.007);
-  const inY = t.y > sTop - 14 && t.y < sBot + 14;
   const hits = [];
   for (let i = 0; i < strings.length; i++) {
-    const sx = strings[i].x, side = t.sides[i];
+    const s = strings[i], sx = s.x, side = t.sides[i];
     const ns = t.x < sx - d ? -1 : t.x > sx + d ? 1 : side;
-    if (ns !== side) { t.sides[i] = ns; if (inY) hits.push(i); }
+    if (ns !== side) { t.sides[i] = ns; if (t.y > s.y1 - 14 && t.y < s.y2 + 14) hits.push(i); }
   }
   if (hits.length) {
     const vel = clamp(0.3 + Math.abs(t.vx) / (W * 3), 0.3, 1);
@@ -636,31 +658,47 @@ function drawPiano() {
 }
 
 function drawStrings(now) {
-  g.strokeStyle = 'rgba(244,236,221,.3)'; g.lineWidth = 2;
-  g.beginPath();
-  g.moveTo(strings[0].x - 14, sTop); g.lineTo(strings[strings.length - 1].x + 14, sTop);
-  g.moveTo(strings[0].x - 14, sBot); g.lineTo(strings[strings.length - 1].x + 14, sBot);
-  g.stroke();
-  const n = strings.length, showNames = (strings[1].x - strings[0].x) >= 30;
-  for (let i = 0; i < n; i++) {
-    const s = strings[i];
-    s.amp *= 0.955;
-    const wob = calm ? 0 : s.amp * 13 * Math.sin(now * 0.055 + i * 1.7);
+  const n = strings.length, harp = mode === 'harp', first = strings[0], last = strings[n - 1];
+  const gap = strings[1].x - first.x;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  if (harp) {
+    const cx = first.x - Math.max(16, gap * 0.9), ex = last.x + 12;
+    g.strokeStyle = C.wood; g.lineWidth = 9;
+    g.beginPath(); g.moveTo(cx, first.y2 + 10);
+    strings.forEach(s => g.lineTo(s.x, s.y2 + 6));
+    g.lineTo(ex, last.y2 + 6); g.stroke();
+    g.strokeStyle = C.brass; g.lineWidth = 7;
+    g.beginPath(); g.moveTo(cx, first.y2 + 10); g.lineTo(cx, first.y1 - 16);
+    strings.forEach(s => g.lineTo(s.x, s.y1 - 7));
+    g.lineTo(ex, last.y1 - 7); g.lineTo(ex, last.y2 + 6); g.stroke();
+  } else {
+    g.strokeStyle = 'rgba(244,236,221,.3)'; g.lineWidth = 2;
     g.beginPath();
-    g.moveTo(s.x, sTop);
-    g.quadraticCurveTo(s.x + wob * 2, (sTop + sBot) / 2, s.x, sBot);
-    g.lineWidth = 3.4 - 2.2 * (i / (n - 1)) + s.amp * 1.5;
-    g.strokeStyle = C.brass;
-    g.globalAlpha = 0.6 + Math.min(0.4, s.amp);
+    g.moveTo(first.x - 14, sTop); g.lineTo(last.x + 14, sTop);
+    g.moveTo(first.x - 14, sBot); g.lineTo(last.x + 14, sBot);
+    g.stroke();
+  }
+  for (let i = 0; i < n; i++) {
+    const s = strings[i], u = i / (n - 1);
+    s.amp *= harp ? 0.968 : 0.955;
+    const wob = calm ? 0 : s.amp * (harp ? 9 : 13) * Math.sin(now * 0.055 + i * 1.7);
+    g.beginPath();
+    g.moveTo(s.x, s.y1);
+    g.quadraticCurveTo(s.x + wob * 2, (s.y1 + s.y2) / 2, s.x, s.y2);
+    g.lineWidth = (harp ? 2.8 - 1.5 * u : 3.4 - 2.2 * u) + s.amp * 1.5;
+    g.strokeStyle = s.color;
+    g.globalAlpha = (harp ? 0.78 : 0.6) + Math.min(harp ? 0.22 : 0.4, s.amp);
     g.stroke();
     g.globalAlpha = 1;
-    g.fillStyle = C.ivory;
-    g.beginPath(); g.arc(s.x, sTop, 3.5, 0, 6.283); g.arc(s.x, sBot, 3.5, 0, 6.283); g.fill();
-    if (showNames) {
+    if (!harp) {
+      g.fillStyle = C.ivory;
+      g.beginPath(); g.arc(s.x, s.y1, 3.5, 0, 6.283); g.arc(s.x, s.y2, 3.5, 0, 6.283); g.fill();
+    }
+    if (gap >= 30 || (harp && s.midi % 12 === 0)) {
       g.fillStyle = 'rgba(244,236,221,.72)';
       g.font = '500 12px "Golos Text", system-ui, sans-serif';
       g.textAlign = 'center'; g.textBaseline = 'top';
-      g.fillText(NOTE_RU[s.midi % 12], s.x, sBot + 9);
+      g.fillText(NOTE_RU[s.midi % 12], s.x, s.y2 + (harp ? 17 : 9));
     }
   }
 }
@@ -703,6 +741,7 @@ function frame(now) {
   if (camOn && !statusEl.classList.contains('warn')) {
     setStatus(!hands.length ? 'Покажите руки камере'
       : mode === 'piano' ? 'Поднимите палец к клавише, чтобы сыграть'
+      : mode === 'harp' ? 'Проведите пальцами по струнам арфы'
       : 'Проведите пальцами поперёк струн');
   }
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -728,8 +767,10 @@ function layout() {
 function setMode(m) {
   mode = m;
   resetPlay();
+  if (W && H) buildStrings();
   mPiano.setAttribute('aria-pressed', String(m === 'piano'));
   mStrings.setAttribute('aria-pressed', String(m === 'strings'));
+  mHarp.setAttribute('aria-pressed', String(m === 'harp'));
   scaleWrap.hidden = m !== 'strings';
   if (!camOn) touchHint();
   requestAnimationFrame(layout);
@@ -751,9 +792,12 @@ canvas.addEventListener('pointerdown', e => {
   const p = pointerPos(e), now = performance.now();
   const t = setTip('ptr:' + e.pointerId, p.x, p.y, now, C.ivory, 'ptr');
   processTip(t);
-  if (mode === 'strings' && p.y > sTop - 14 && p.y < sBot + 14) {
+  if (mode !== 'piano') {
     let best = -1, bd = 18;
-    strings.forEach((s, i) => { const d = Math.abs(s.x - p.x); if (d < bd) { bd = d; best = i; } });
+    strings.forEach((s, i) => {
+      const d = Math.abs(s.x - p.x);
+      if (d < bd && p.y > s.y1 - 14 && p.y < s.y2 + 14) { bd = d; best = i; }
+    });
     if (best >= 0) pluck(best, 0.7, 0);
   }
 });
@@ -770,6 +814,7 @@ document.addEventListener('pointerup', () => { if (ac && ac.state === 'suspended
 
 mPiano.addEventListener('click', () => { audio(); setMode('piano'); });
 mStrings.addEventListener('click', () => { audio(); setMode('strings'); });
+mHarp.addEventListener('click', () => { audio(); setMode('harp'); });
 scaleSel.addEventListener('change', () => { resetPlay(); buildStrings(); });
 camBtn.addEventListener('click', () => {
   if (camOn) { stopCamera(); touchHint(); } else startCamera();
