@@ -126,7 +126,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--teal); out
 }
 .seg button[aria-pressed="true"] { background: var(--brass); color: var(--ink); font-weight: 600; }
 .sel.mode { display: none; }
-@media (max-width: 619px) {
+@media (max-width: 939px) {
   .seg { display: none; }
   .sel.mode { display: flex; }
 }
@@ -186,6 +186,8 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
       <button type="button" data-mode="harp" aria-pressed="false">Арфа</button>
       <button type="button" data-mode="drums" aria-pressed="false">Барабаны</button>
       <button type="button" data-mode="cimbalom" aria-pressed="false">Цамбал</button>
+      <button type="button" data-mode="draw" aria-pressed="false">Рисование</button>
+      <button type="button" data-mode="letters" aria-pressed="false">Буквы</button>
     </div>
     <div class="sel mode">
       <select id="modeSel" aria-label="Инструмент">
@@ -194,6 +196,8 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
         <option value="harp">Арфа</option>
         <option value="drums">Барабаны</option>
         <option value="cimbalom">Цамбал</option>
+        <option value="draw">Рисование</option>
+        <option value="letters">Буквы</option>
       </select>
     </div>
     <label class="sel" id="scaleWrap" for="scale" hidden>Лад
@@ -205,6 +209,8 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
         <option value="doina">Дойна</option>
       </select>
     </label>
+    <button type="button" id="saveBtn" hidden>Сохранить рисунок</button>
+    <button type="button" id="voiceBtn" hidden aria-pressed="true">Голос включён</button>
     <button type="button" id="camBtn">Включить камеру</button>
     <button type="button" id="flipBtn" hidden>Другая камера</button>
   </div>
@@ -212,12 +218,14 @@ button.primary { background: var(--brass); border-color: var(--brass); color: va
   <section id="intro" aria-labelledby="introTitle">
     <div class="card">
       <h1 id="introTitle">Воздушный <span>инструмент</span></h1>
-      <p>Камера следит за вашими руками, а пальцы играют прямо в воздухе.</p>
+      <p>Камера следит за вашими руками: играйте, рисуйте и учите буквы прямо в воздухе.</p>
       <ol>
         <li><b>Пианино.</b> Клавиши висят сверху. Поднимите палец к клавише, чтобы нажать.</li>
         <li><b>Струны и арфа.</b> Ведите пальцами поперёк струн. Чем быстрее, тем громче.</li>
         <li><b>Барабаны.</b> Бейте по ним указательным пальцем, как палочкой.</li>
         <li><b>Цамбал.</b> Указательные пальцы работают как два молоточка: ведите их через струны вверх и вниз.</li>
+        <li><b>Рисование.</b> Сведите большой и указательный пальцы, как будто держите карандаш, и рисуйте. Наведите руку на цвет, чтобы выбрать его.</li>
+        <li><b>Буквы.</b> Английский алфавит: сначала образец, потом вы обводите букву сами.</li>
       </ol>
       <div class="row">
         <button type="button" id="startCam" class="primary">Включить камеру</button>
@@ -565,6 +573,7 @@ function dropTip(id) {
   tips.delete(id);
 }
 function resetPlay() {
+  pens.clear();
   tips.forEach(t => { releaseKey(t); t.sides = null; t.pad = null; t.padInit = false; });
   keys.forEach(k => { k.on = 0; });
 }
@@ -586,6 +595,7 @@ function setTip(id, x, y, now, color, src) {
 }
 
 function processTip(t) {
+  if (PEN_MODES[mode]) return;
   if (mode === 'piano') {
     const edge = band.h, hyst = Math.max(10, H * 0.02);
     if (!t.key) {
@@ -655,6 +665,448 @@ function processTip(t) {
   }
 }
 
+/* ---------- Drawing and letters ---------- */
+const PEN_MODES = { draw: 1, letters: 1 };
+const TAU = Math.PI * 2;
+const PALETTE = ['#f4ecdd', '#e8584d', '#f08a3c', '#f2c94c', '#5ecb6b', '#62d2c4', '#6f93e8', '#b57be0'];
+const SIZES = [4, 9, 18];
+const PILL_FONT = '500 13px "Golos Text", system-ui, sans-serif';
+const ink = document.createElement('canvas'), ig = ink.getContext('2d');
+const strokesBy = { draw: [], letters: [] };
+const pens = new Map();
+let penColor = PALETTE[1], penSize = SIZES[1], erasing = false;
+let airBtns = [], drawTop = 100, voiceOn = true;
+
+/* Capital letters on a 100 x 140 grid, strokes in school order. M/L are points, A is an arc: cx cy rx ry from-angle to-angle */
+const GLYPHS = {
+  A: 'M 50 0 L 10 140 | M 50 0 L 90 140 | M 25 90 L 75 90',
+  B: 'M 20 0 L 20 140 | M 20 0 L 50 0 A 50 35 32 35 -90 90 L 20 70 L 52 70 A 52 105 36 35 -90 90 L 20 140',
+  C: 'A 54 70 42 70 -40 -320',
+  D: 'M 20 0 L 20 140 | M 20 0 L 38 0 A 38 70 50 70 -90 90 L 20 140',
+  E: 'M 20 0 L 20 140 | M 20 0 L 80 0 | M 20 70 L 70 70 | M 20 140 L 80 140',
+  F: 'M 20 0 L 20 140 | M 20 0 L 80 0 | M 20 70 L 68 70',
+  G: 'A 52 70 42 70 -40 -360 L 60 70',
+  H: 'M 20 0 L 20 140 | M 80 0 L 80 140 | M 20 70 L 80 70',
+  I: 'M 50 0 L 50 140 | M 30 0 L 70 0 | M 30 140 L 70 140',
+  J: 'M 68 0 L 68 100 A 44 100 24 40 0 180',
+  K: 'M 20 0 L 20 140 | M 80 0 L 20 85 | M 40 58 L 82 140',
+  L: 'M 20 0 L 20 140 L 80 140',
+  M: 'M 12 140 L 12 0 L 50 90 L 88 0 L 88 140',
+  N: 'M 18 140 L 18 0 L 82 140 L 82 0',
+  O: 'A 50 70 42 70 -90 -450',
+  P: 'M 20 0 L 20 140 | M 20 0 L 50 0 A 50 37 33 37 -90 90 L 20 74',
+  Q: 'A 50 70 42 70 -90 -450 | M 60 105 L 92 142',
+  R: 'M 20 0 L 20 140 | M 20 0 L 50 0 A 50 37 33 37 -90 90 L 20 74 | M 46 74 L 86 140',
+  S: 'A 50 36 31 36 -30 -270 A 50 106 33 34 -90 150',
+  T: 'M 15 0 L 85 0 | M 50 0 L 50 140',
+  U: 'M 18 0 L 18 95 A 50 95 32 45 180 0 L 82 0',
+  V: 'M 12 0 L 50 140 L 88 0',
+  W: 'M 5 0 L 28 140 L 50 30 L 72 140 L 95 0',
+  X: 'M 15 0 L 85 140 | M 85 0 L 15 140',
+  Y: 'M 12 0 L 50 70 | M 88 0 L 50 70 L 50 140',
+  Z: 'M 15 0 L 85 0 L 15 140 L 85 140'
+};
+const WORDS = {
+  A: ['Apple', 'яблоко'], B: ['Ball', 'мяч'], C: ['Cat', 'кошка'], D: ['Dog', 'собака'], E: ['Egg', 'яйцо'],
+  F: ['Fish', 'рыба'], G: ['Goat', 'коза'], H: ['Hat', 'шляпа'], I: ['Ice', 'лёд'], J: ['Juice', 'сок'],
+  K: ['Kite', 'воздушный змей'], L: ['Lion', 'лев'], M: ['Moon', 'луна'], N: ['Nose', 'нос'], O: ['Orange', 'апельсин'],
+  P: ['Pen', 'ручка'], Q: ['Queen', 'королева'], R: ['Rain', 'дождь'], S: ['Sun', 'солнце'], T: ['Tree', 'дерево'],
+  U: ['Umbrella', 'зонт'], V: ['Violin', 'скрипка'], W: ['Water', 'вода'], X: ['Xylophone', 'ксилофон'],
+  Y: ['Yellow', 'жёлтый'], Z: ['Zebra', 'зебра']
+};
+const LETTERS = Object.keys(GLYPHS);
+const TOL = 13;
+const L = { idx: 0, strokes: [], pts: [], phase: 'demo', t0: 0, hits: 0, inkN: 0, inkOk: 0, doneAt: 0, stars: 0, s: 3, ox: 0, oy: 0 };
+
+function resample(raw, step) {
+  const out = [{ x: raw[0][0], y: raw[0][1], hit: false }];
+  let carry = 0;
+  for (let i = 1; i < raw.length; i++) {
+    const ax = raw[i - 1][0], ay = raw[i - 1][1], bx = raw[i][0], by = raw[i][1];
+    const len = Math.hypot(bx - ax, by - ay);
+    let d = step - carry;
+    while (d <= len) { out.push({ x: ax + (bx - ax) * d / len, y: ay + (by - ay) * d / len, hit: false }); d += step; }
+    carry = len - (d - step);
+  }
+  const e = raw[raw.length - 1], last = out[out.length - 1];
+  if (Math.hypot(e[0] - last.x, e[1] - last.y) > 0.5) out.push({ x: e[0], y: e[1], hit: false });
+  return out;
+}
+function parseGlyph(d) {
+  return d.split('|').map(part => {
+    const t = part.trim().split(/\s+/), raw = [];
+    let i = 0;
+    while (i < t.length) {
+      const c = t[i++];
+      if (c === 'A') {
+        const cx = +t[i++], cy = +t[i++], rx = +t[i++], ry = +t[i++], a0 = +t[i++], a1 = +t[i++];
+        const n = Math.max(2, Math.ceil(Math.abs(a1 - a0) / 6));
+        for (let k = 0; k <= n; k++) {
+          const a = (a0 + (a1 - a0) * k / n) * Math.PI / 180;
+          raw.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]);
+        }
+      } else raw.push([+t[i++], +t[i++]]);
+    }
+    return resample(raw, 3);
+  });
+}
+
+function say(parts) {
+  if (!voiceOn || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+  try {
+    speechSynthesis.cancel();
+    parts.forEach(pt => {
+      const u = new SpeechSynthesisUtterance(pt[0]);
+      u.lang = pt[1]; u.rate = pt[1] === 'en-US' ? 0.8 : 1;
+      speechSynthesis.speak(u);
+    });
+  } catch (e) {}
+}
+function hush() { try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) {} }
+
+function resetLetterInk() {
+  L.pts.forEach(pt => { pt.hit = false; });
+  L.hits = 0; L.inkN = 0; L.inkOk = 0;
+  strokesBy.letters = [];
+  pens.forEach(endStroke);
+  redrawInk();
+}
+function gotoLetter(i) {
+  L.idx = (i + LETTERS.length) % LETTERS.length;
+  L.strokes = parseGlyph(GLYPHS[LETTERS[L.idx]]);
+  L.pts = [].concat.apply([], L.strokes);
+  startDemo();
+}
+function startDemo() {
+  resetLetterInk();
+  L.phase = 'demo'; L.t0 = performance.now();
+  say([['Буква', 'ru-RU'], [LETTERS[L.idx] + '.', 'en-US'], ['Следи за мной', 'ru-RU']]);
+}
+function beginTrace() {
+  L.phase = 'trace';
+  say([['Теперь ты', 'ru-RU']]);
+}
+function retryLetter() { resetLetterInk(); L.phase = 'trace'; }
+function letterDone() {
+  const ch = LETTERS[L.idx], acc = L.inkN ? L.inkOk / L.inkN : 1;
+  L.phase = 'done'; L.doneAt = performance.now();
+  L.stars = acc >= 0.82 ? 3 : acc >= 0.6 ? 2 : 1;
+  pens.forEach(endStroke);
+  [72, 76, 79].forEach((m, i) => setTimeout(() => {
+    const v = pianoOn(m, 0.6);
+    if (v) setTimeout(() => v.stop(), 520);
+  }, i * 110));
+  say([['Молодец!', 'ru-RU'], [ch + '. ' + WORDS[ch][0] + '.', 'en-US']]);
+}
+function letterInk(x, y) {
+  if (L.phase !== 'trace') return;
+  const ux = (x - L.ox) / L.s, uy = (y - L.oy) / L.s;
+  let near = false;
+  for (let i = 0; i < L.pts.length; i++) {
+    const pt = L.pts[i], d = Math.hypot(pt.x - ux, pt.y - uy);
+    if (d < TOL * 1.25) near = true;
+    if (d < TOL && !pt.hit) { pt.hit = true; L.hits++; }
+  }
+  L.inkN++;
+  if (near) L.inkOk++;
+  /* done only when every stroke is traced, so a crossbar or a tail cannot be skipped */
+  if (L.hits / L.pts.length >= 0.9 && L.strokes.every(st => st.filter(pt => pt.hit).length / st.length >= 0.85)) letterDone();
+}
+function letterHint() {
+  if (L.phase === 'demo') return 'Следи за мной: так пишется буква ' + LETTERS[L.idx];
+  if (L.phase === 'done') return 'Молодец! Дальше будет следующая буква';
+  return camOn ? 'Теперь ты: сведи большой и указательный пальцы и обведи букву'
+    : 'Теперь ты: обведи букву пальцем или мышью';
+}
+
+/* Ink */
+function inkSeg(st, a, b) {
+  ig.globalCompositeOperation = st.erase ? 'destination-out' : 'source-over';
+  ig.strokeStyle = st.color; ig.fillStyle = st.color;
+  ig.lineWidth = st.size; ig.lineCap = 'round'; ig.lineJoin = 'round';
+  ig.beginPath();
+  if (a === b) { ig.arc(a.x, a.y, st.size / 2, 0, TAU); ig.fill(); }
+  else { ig.moveTo(a.x, a.y); ig.lineTo(b.x, b.y); ig.stroke(); }
+}
+function redrawInk() {
+  ig.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ig.globalCompositeOperation = 'source-over';
+  ig.clearRect(0, 0, W, H);
+  (strokesBy[mode] || []).forEach(st => {
+    inkSeg(st, st.pts[0], st.pts[0]);
+    for (let i = 1; i < st.pts.length; i++) inkSeg(st, st.pts[i - 1], st.pts[i]);
+  });
+}
+function endStroke(p) { p.stroke = null; }
+function undoInk() { pens.forEach(endStroke); strokesBy.draw.pop(); redrawInk(); }
+function clearInk() { pens.forEach(endStroke); strokesBy.draw = []; redrawInk(); }
+function saveInk() {
+  const out = document.createElement('canvas');
+  out.width = ink.width; out.height = ink.height;
+  const og = out.getContext('2d');
+  og.fillStyle = C.ink; og.fillRect(0, 0, out.width, out.height);
+  og.drawImage(ink, 0, 0);
+  out.toBlob(blob => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'risunok.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, 'image/png');
+}
+
+function btnAt(x, y) {
+  for (let i = 0; i < airBtns.length; i++) {
+    const b = airBtns[i];
+    if (x > b.x - 3 && x < b.x + b.w + 3 && y > b.y - 3 && y < b.y + b.h + 3) return b;
+  }
+  return null;
+}
+function penMove(id, x, y, down, now, src) {
+  let p = pens.get(id);
+  if (!p) { p = { id, x, y, down: false, stroke: null, src, hover: null, since: now, fired: false, pinch: false }; pens.set(id, p); }
+  p.x = x; p.y = y; p.seen = now;
+  const b = btnAt(x, y);
+  if (b !== p.hover) { p.hover = b; p.since = now; p.fired = false; }
+  if (b) {
+    endStroke(p); p.down = false;
+    if (!p.fired && (src === 'ptr' || now - p.since > b.dwell)) { p.fired = true; b.go(); }
+    return;
+  }
+  const canInk = y > drawTop && y < H - barH && !(mode === 'letters' && L.phase !== 'trace');
+  if (down && canInk) {
+    if (!p.stroke) {
+      const letters = mode === 'letters';
+      p.stroke = {
+        color: letters ? C.teal : penColor,
+        size: letters ? Math.max(8, L.s * 5) : erasing ? penSize * 2.5 : penSize,
+        erase: !letters && erasing, pts: [{ x, y }]
+      };
+      strokesBy[mode].push(p.stroke);
+      inkSeg(p.stroke, p.stroke.pts[0], p.stroke.pts[0]);
+      if (letters) letterInk(x, y);
+    } else {
+      const pts = p.stroke.pts, last = pts[pts.length - 1];
+      if (Math.hypot(x - last.x, y - last.y) >= 1.5) {
+        const pt = { x, y };
+        pts.push(pt); inkSeg(p.stroke, last, pt);
+        if (mode === 'letters') letterInk(x, y);
+      }
+    }
+  } else endStroke(p);
+  p.down = down && canInk;
+}
+
+function rowLayout(items, cy) {
+  const total = items.reduce((a, b) => a + b.w, 0);
+  const gap = items.length > 1 ? clamp((W - 24 - total) / (items.length - 1), 2, 10) : 0;
+  let x = (W - total - gap * (items.length - 1)) / 2;
+  items.forEach(b => { b.x = x; b.y = cy - b.h / 2; x += b.w + gap; });
+}
+function pill(label, dwell, go, on) {
+  g.font = PILL_FONT;
+  return { kind: 'pill', label, w: Math.ceil(g.measureText(label).width) + 26, h: 34, dwell, go, on: on || (() => false) };
+}
+function buildPen() {
+  airBtns = [];
+  if (mode === 'draw') {
+    const r1 = PALETTE.map(c => ({ kind: 'dot', w: 34, h: 34, color: c, dwell: 380, on: () => !erasing && penColor === c, go() { penColor = c; erasing = false; } }));
+    const r2 = SIZES.map(sz => ({ kind: 'size', w: 34, h: 34, size: sz, dwell: 380, on: () => penSize === sz, go() { penSize = sz; } }));
+    r2.push(pill('Ластик', 380, () => { erasing = !erasing; }, () => erasing));
+    r2.push(pill('Отмена', 650, undoInk));
+    r2.push(pill('Очистить', 950, clearInk));
+    rowLayout(r1, 30); rowLayout(r2, 74);
+    airBtns = r1.concat(r2); drawTop = 100;
+  } else if (mode === 'letters') {
+    const r = [pill('Назад', 600, () => gotoLetter(L.idx - 1)), pill('Образец', 600, startDemo),
+      pill('Заново', 600, retryLetter), pill('Дальше', 600, () => gotoLetter(L.idx + 1))];
+    rowLayout(r, 32);
+    airBtns = r; drawTop = 58;
+    const top = 124, bot = Math.max(top + 160, H - barH - 100);
+    L.s = Math.max(1, Math.min((W - 64) / 100, (bot - top) / 140));
+    L.ox = (W - 100 * L.s) / 2; L.oy = top + (bot - top - 140 * L.s) / 2;
+  }
+}
+function resizeInk(oW, oH) {
+  ink.width = canvas.width; ink.height = canvas.height;
+  if (oW && oH && (oW !== W || oH !== H)) {
+    strokesBy.draw.forEach(st => st.pts.forEach(pt => { pt.x *= W / oW; pt.y *= H / oH; }));
+    strokesBy.letters = [];
+  }
+  redrawInk();
+}
+
+function pillPath(x, y, w, h) {
+  const r = h / 2;
+  g.beginPath();
+  g.moveTo(x + r, y); g.lineTo(x + w - r, y);
+  g.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  g.lineTo(x + r, y + h);
+  g.arc(x + r, y + r, r, Math.PI / 2, Math.PI * 1.5);
+  g.closePath();
+}
+function drawAirBtns(now) {
+  airBtns.forEach(b => {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2, sel = b.on();
+    let prog = 0;
+    pens.forEach(p => { if (p.hover === b && !p.fired) prog = Math.max(prog, (now - p.since) / b.dwell); });
+    prog = Math.min(1, prog);
+    if (b.kind === 'pill') {
+      pillPath(b.x, b.y, b.w, b.h);
+      g.fillStyle = sel ? C.brass : 'rgba(36,31,49,.94)'; g.fill();
+      g.strokeStyle = 'rgba(244,236,221,.32)'; g.lineWidth = 1; g.stroke();
+      if (prog > 0) {
+        g.save(); pillPath(b.x, b.y, b.w, b.h); g.clip();
+        g.fillStyle = 'rgba(231,176,82,.6)'; g.fillRect(b.x, b.y, b.w * prog, b.h);
+        g.restore();
+      }
+      g.fillStyle = sel ? C.ink : C.ivory; g.font = PILL_FONT;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(b.label, cx, cy + 0.5);
+      return;
+    }
+    g.beginPath(); g.arc(cx, cy, 14, 0, TAU);
+    if (b.kind === 'dot') { g.fillStyle = b.color; g.fill(); }
+    else {
+      g.fillStyle = 'rgba(36,31,49,.94)'; g.fill();
+      g.strokeStyle = 'rgba(244,236,221,.32)'; g.lineWidth = 1; g.stroke();
+      g.beginPath(); g.arc(cx, cy, Math.min(11, b.size / 2 + 1.5), 0, TAU);
+      g.fillStyle = C.ivory; g.fill();
+    }
+    if (sel) { g.beginPath(); g.arc(cx, cy, 17.5, 0, TAU); g.strokeStyle = C.ivory; g.lineWidth = 2.5; g.stroke(); }
+    if (prog > 0) {
+      g.beginPath(); g.arc(cx, cy, 17.5, -Math.PI / 2, -Math.PI / 2 + TAU * prog);
+      g.strokeStyle = C.brass; g.lineWidth = 3.5; g.stroke();
+    }
+  });
+}
+
+function drawPaint(now) {
+  g.fillStyle = 'rgba(21,18,29,.6)';
+  g.fillRect(0, 0, W, drawTop);
+  g.drawImage(ink, 0, 0, W, H);
+  drawAirBtns(now);
+}
+
+function pathOf(st, upto) {
+  g.beginPath();
+  for (let k = 0; k < upto; k++) {
+    const x = L.ox + st[k].x * L.s, y = L.oy + st[k].y * L.s;
+    if (k) g.lineTo(x, y); else g.moveTo(x, y);
+  }
+}
+function drawLetters(now) {
+  const s = L.s, ch = LETTERS[L.idx], word = WORDS[ch];
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.fillStyle = 'rgba(21,18,29,.6)';
+  g.fillRect(0, 0, W, 106);
+  g.textBaseline = 'middle';
+  g.textAlign = 'center';
+  g.fillStyle = C.ivory;
+  g.font = '500 15px "Golos Text", system-ui, sans-serif';
+  g.fillText(ch + ' ' + ch.toLowerCase() + '  ·  ' + word[0] + '  ·  ' + word[1], W / 2, 84);
+  g.textAlign = 'right';
+  g.fillStyle = 'rgba(244,236,221,.6)';
+  g.font = '500 12px "Golos Text", system-ui, sans-serif';
+  if (W >= 360) g.fillText((L.idx + 1) + ' / ' + LETTERS.length, W - 14, 84);
+
+  L.strokes.forEach(st => {
+    pathOf(st, st.length);
+    g.strokeStyle = camOn ? 'rgba(21,18,29,.55)' : 'rgba(244,236,221,.13)';
+    g.lineWidth = 22 * s; g.stroke();
+    g.setLineDash([1, 7 * s / 3 + 4]);
+    g.strokeStyle = 'rgba(244,236,221,.75)'; g.lineWidth = 2.5; g.stroke();
+    g.setLineDash([]);
+  });
+  g.strokeStyle = C.brass; g.lineWidth = 7 * s;
+  L.strokes.forEach(st => {
+    g.beginPath();
+    for (let k = 1; k < st.length; k++) {
+      if (st[k].hit && st[k - 1].hit) {
+        g.moveTo(L.ox + st[k - 1].x * s, L.oy + st[k - 1].y * s);
+        g.lineTo(L.ox + st[k].x * s, L.oy + st[k].y * s);
+      }
+    }
+    g.stroke();
+  });
+
+  if (L.phase === 'demo') {
+    const el = (now - L.t0) / 1000 - 1;
+    let acc = 0, fin = true;
+    for (let si = 0; si < L.strokes.length; si++) {
+      const st = L.strokes[si], dur = st.length * 3 / 105;
+      if (el < acc) { fin = false; break; }
+      const part = el < acc + dur;
+      const upto = part ? Math.max(2, Math.ceil((el - acc) / dur * st.length)) : st.length;
+      pathOf(st, upto);
+      g.strokeStyle = C.brass; g.lineWidth = 8 * s; g.stroke();
+      if (part) {
+        const hd = st[upto - 1];
+        g.beginPath(); g.arc(L.ox + hd.x * s, L.oy + hd.y * s, 7 * s, 0, TAU);
+        g.fillStyle = C.ivory; g.fill();
+        g.lineWidth = 3; g.strokeStyle = C.ink; g.stroke();
+        fin = false; break;
+      }
+      acc += dur + 0.35;
+    }
+    if (fin && el > acc) beginTrace();
+  }
+
+  g.drawImage(ink, 0, 0, W, H);
+
+  g.font = '600 12px "Golos Text", system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  L.strokes.forEach((st, si) => {
+    const x = L.ox + st[0].x * s, y = L.oy + st[0].y * s;
+    g.beginPath(); g.arc(x, y, 11, 0, TAU);
+    g.fillStyle = C.ink; g.fill();
+    g.lineWidth = 2; g.strokeStyle = C.brass; g.stroke();
+    g.fillStyle = C.ivory; g.fillText(String(si + 1), x, y + 0.5);
+  });
+
+  if (L.phase === 'trace') {
+    let target = null;
+    for (let si = 0; si < L.strokes.length && !target; si++) {
+      const st = L.strokes[si], done = st.filter(pt => pt.hit).length;
+      if (done / st.length < 0.85) target = st.find(pt => !pt.hit);
+    }
+    if (target) {
+      const pulse = calm ? 0.5 : 0.5 + 0.5 * Math.sin(now * 0.008);
+      g.beginPath(); g.arc(L.ox + target.x * s, L.oy + target.y * s, 15 + pulse * 7, 0, TAU);
+      g.strokeStyle = C.teal; g.lineWidth = 3; g.globalAlpha = 0.5 + 0.5 * (1 - pulse); g.stroke(); g.globalAlpha = 1;
+    }
+    const pw = Math.min(220, W - 80), px = (W - pw) / 2, done = L.hits / L.pts.length / 0.9;
+    g.fillStyle = 'rgba(244,236,221,.2)'; g.fillRect(px, 102, pw, 4);
+    g.fillStyle = C.brass; g.fillRect(px, 102, pw * Math.min(1, done), 4);
+  } else if (L.phase === 'done') {
+    const cy = L.oy + 70 * s;
+    g.fillStyle = 'rgba(21,18,29,.78)';
+    pillPath(W / 2 - 130, cy - 56, 260, 112); g.fill();
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = C.ivory; g.font = '700 24px "Unbounded", "Arial Black", sans-serif';
+    g.fillText('Молодец!', W / 2, cy - 18);
+    g.font = '28px system-ui, sans-serif';
+    for (let k = 0; k < 3; k++) {
+      g.fillStyle = k < L.stars ? C.brass : 'rgba(244,236,221,.25)';
+      g.fillText('★', W / 2 + (k - 1) * 36, cy + 22);
+    }
+  }
+  drawAirBtns(now);
+}
+
+function drawPens() {
+  pens.forEach(p => {
+    const letters = mode === 'letters';
+    const col = letters ? C.teal : erasing ? C.ivory : penColor;
+    const r = letters ? 9 : Math.max(7, (erasing ? penSize * 1.25 : penSize / 2) + 4);
+    g.beginPath(); g.arc(p.x, p.y, r, 0, TAU);
+    if (p.down) { g.fillStyle = col; g.globalAlpha = erasing && !letters ? 0.25 : 0.9; g.fill(); g.globalAlpha = 1; }
+    g.lineWidth = 2.5; g.strokeStyle = col; g.stroke();
+    g.beginPath(); g.arc(p.x, p.y, r + 2.5, 0, TAU);
+    g.lineWidth = 1.5; g.strokeStyle = C.ink; g.stroke();
+  });
+}
+
 /* ---------- Camera and hand tracking ---------- */
 function toScreen(p) {
   const vw = video.videoWidth || W, vh = video.videoHeight || H;
@@ -675,6 +1127,17 @@ function updateFromCamera(res, now) {
     const color = label.indexOf('Left') === 0 ? C.teal : C.brass;
     const pts = lm.map(toScreen);
     hands.push({ pts, color });
+    if (PEN_MODES[mode]) {
+      /* Pinch of thumb and index is the pencil: closed draws, open only moves */
+      const a = pts[4], b = pts[8], id = 'cam:' + label, old = pens.get(id);
+      const ratio = Math.hypot(a.x - b.x, a.y - b.y) / (Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y) || 1);
+      const pinch = old && old.pinch ? ratio < 0.5 : ratio < 0.32;
+      let x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+      if (old) { x = old.x + (x - old.x) * 0.6; y = old.y + (y - old.y) * 0.6; }
+      penMove(id, x, y, pinch, now, 'cam');
+      pens.get(id).pinch = pinch;
+      return;
+    }
     TIP_IDS.forEach(ti => setTip('cam:' + label + ':' + ti, pts[ti].x, pts[ti].y, now, color, 'cam'));
   });
 }
@@ -929,9 +1392,11 @@ function frame(now) {
     if (t.src === 'cam' && now - t.seen > 220) { dropTip(id); return; }
     processTip(t);
   });
-  if (camOn && !statusEl.classList.contains('warn')) {
-    setStatus(!hands.length ? 'Покажите руки камере'
-      : HINT_CAM[mode]);
+  pens.forEach((p, id) => { if (p.src === 'cam' && now - p.seen > 250) pens.delete(id); });
+  if (mode === 'letters' && L.phase === 'done' && now - L.doneAt > 3200) gotoLetter(L.idx + 1);
+  if (!statusEl.classList.contains('warn')) {
+    if (camOn) setStatus(!hands.length ? 'Покажите руки камере' : mode === 'letters' ? letterHint() : HINT_CAM[mode]);
+    else if (mode === 'letters') setStatus(letterHint());
   }
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.clearRect(0, 0, W, H);
@@ -939,21 +1404,26 @@ function frame(now) {
   if (mode === 'piano') drawPiano();
   else if (mode === 'drums') drawDrums();
   else if (mode === 'cimbalom') drawCimbalom(now);
+  else if (mode === 'draw') drawPaint(now);
+  else if (mode === 'letters') drawLetters(now);
   else drawStrings(now);
   drawHands();
+  if (PEN_MODES[mode]) drawPens();
 }
 
 /* ---------- Layout, controls, touch ---------- */
 function layout() {
   const r = stage.getBoundingClientRect();
   if (!r.width || !r.height) return;
+  const oW = W, oH = H;
   W = r.width; H = r.height;
   DPR = Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   barH = bar.getBoundingClientRect().height || 64;
   stage.style.setProperty('--bar-h', barH + 'px');
   resetPlay();
-  buildPiano(); buildStrings(); buildDrums();
+  buildPiano(); buildStrings(); buildDrums(); buildPen();
+  resizeInk(oW, oH);
 }
 
 const HINT_CAM = {
@@ -961,14 +1431,17 @@ const HINT_CAM = {
   strings: 'Проведите пальцами поперёк струн',
   harp: 'Проведите пальцами по струнам арфы',
   drums: 'Бейте по барабанам указательными пальцами',
-  cimbalom: 'Указательные пальцы как молоточки: ведите их через струны'
+  cimbalom: 'Указательные пальцы как молоточки: ведите их через струны',
+  draw: 'Сведите большой и указательный пальцы, чтобы рисовать. Наведите руку на цвет, чтобы выбрать его'
 };
 const HINT_TOUCH = {
   piano: 'Камера выключена. Нажимайте клавиши пальцем или мышью.',
   strings: 'Камера выключена. Ведите пальцем или мышью поперёк струн.',
   harp: 'Камера выключена. Ведите пальцем или мышью поперёк струн.',
   drums: 'Камера выключена. Нажимайте на барабаны пальцем или мышью.',
-  cimbalom: 'Камера выключена. Нажимайте на струны или ведите через них вверх и вниз.'
+  cimbalom: 'Камера выключена. Нажимайте на струны или ведите через них вверх и вниз.',
+  draw: 'Камера выключена. Рисуйте пальцем или мышью.',
+  letters: ''
 };
 
 function setMode(m) {
@@ -978,7 +1451,10 @@ function setMode(m) {
   modeSel.value = m;
   scaleWrap.hidden = !(m in scaleBy);
   if (m in scaleBy) scaleSel.value = scaleBy[m];
-  if (W && H) { buildStrings(); buildDrums(); }
+  $('saveBtn').hidden = m !== 'draw';
+  $('voiceBtn').hidden = m !== 'letters';
+  if (W && H) { buildStrings(); buildDrums(); buildPen(); redrawInk(); }
+  if (m === 'letters') gotoLetter(L.idx); else hush();
   if (!camOn) touchHint();
   requestAnimationFrame(layout);
 }
@@ -994,6 +1470,7 @@ canvas.addEventListener('pointerdown', e => {
   audio();
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   const p = pointerPos(e), now = performance.now();
+  if (PEN_MODES[mode]) { penMove('ptr:' + e.pointerId, p.x, p.y, true, now, 'ptr'); return; }
   const t = setTip('ptr:' + e.pointerId, p.x, p.y, now, C.ivory, 'ptr');
   processTip(t);
   if (mode !== 'piano' && mode !== 'drums') {
@@ -1008,12 +1485,13 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   const id = 'ptr:' + e.pointerId;
+  if (pens.has(id)) { const q = pointerPos(e); penMove(id, q.x, q.y, true, performance.now(), 'ptr'); return; }
   if (!tips.has(id)) return;
   const p = pointerPos(e);
   processTip(setTip(id, p.x, p.y, performance.now(), C.ivory, 'ptr'));
 });
 ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
-  canvas.addEventListener(ev, e => dropTip('ptr:' + e.pointerId)));
+  canvas.addEventListener(ev, e => { pens.delete('ptr:' + e.pointerId); dropTip('ptr:' + e.pointerId); }));
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('pointerup', () => { if (ac && ac.state === 'suspended') ac.resume().catch(() => {}); });
 
@@ -1022,6 +1500,13 @@ modeSel.addEventListener('change', () => { audio(); setMode(modeSel.value); });
 scaleSel.addEventListener('change', () => {
   if (mode in scaleBy) scaleBy[mode] = scaleSel.value;
   resetPlay(); buildStrings();
+});
+$('saveBtn').addEventListener('click', saveInk);
+$('voiceBtn').addEventListener('click', () => {
+  voiceOn = !voiceOn;
+  $('voiceBtn').textContent = voiceOn ? 'Голос включён' : 'Голос выключен';
+  $('voiceBtn').setAttribute('aria-pressed', String(voiceOn));
+  if (!voiceOn) hush();
 });
 camBtn.addEventListener('click', () => {
   if (camOn) { stopCamera(); touchHint(); } else startCamera();
@@ -1033,7 +1518,8 @@ flipBtn.addEventListener('click', () => {
 $('startCam').addEventListener('click', () => { intro.hidden = true; startCamera(); });
 $('startTouch').addEventListener('click', () => { intro.hidden = true; audio(); touchHint(); });
 
-document.addEventListener('visibilitychange', () => { if (document.hidden) resetPlay(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { resetPlay(); hush(); } });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout).catch(() => {});
 window.addEventListener('resize', layout);
 if (window.ResizeObserver) new ResizeObserver(layout).observe(stage);
 
