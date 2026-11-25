@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Воздушный инструмент</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=Unbounded:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Layout: one full-screen stage (camera + canvas). The piano hangs from the top edge,
+     strings fill the stage, controls dock at the bottom. Single dark theme by choice. */
+  --ink: #15121d;
+  --ink-2: #241f31;
+  --ivory: #f4ecdd;
+  --brass: #e7b052;
+  --teal: #62d2c4;
+  --muted: #a8a1b8;
+  --line: rgba(244, 236, 221, .16);
+  --display: "Unbounded", "Arial Black", system-ui, sans-serif;
+  --body: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--ivory);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#stage {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 80% at 50% 100%, #33284a 0%, transparent 60%),
+    radial-gradient(90% 60% at 15% 0%, #2a2238 0%, transparent 70%),
+    var(--ink);
+}
+#cam {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .4s;
+}
+#cam.mirror { transform: scaleX(-1); }
+.cam-on #cam { opacity: 1; }
+#view {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: pointer;
+}
+#status {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--bar-h, 64px) + 12px);
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(21, 18, 29, .78);
+  border: 1px solid var(--line);
+  color: var(--ivory);
+  font-size: 13.5px;
+  text-align: center;
+  text-wrap: balance;
+  pointer-events: none;
+}
+#status.warn { border-color: var(--brass); color: var(--brass); border-radius: 14px; }
+#status:empty { display: none; }
+#bar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 8px 10px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: rgba(21, 18, 29, .86);
+  border-top: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+button, select {
+  font: inherit;
+  color: var(--ivory);
+  -webkit-appearance: none; appearance: none;
+}
+button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--ink-2);
+  font-weight: 500;
+  cursor: pointer;
+}
+button:hover { border-color: rgba(244, 236, 221, .38); }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+}
+.seg button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+}
+.seg button[aria-pressed="true"] { background: var(--brass); color: var(--ink); font-weight: 600; }
+.sel { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; }
+select {
+  min-height: 40px;
+  padding: 0 30px 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--ink-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23f4ecdd' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 11px center;
+}
+#intro {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  background: rgba(21, 18, 29, .62);
+}
+.card {
+  width: min(430px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 24px 22px 20px;
+  border-radius: 18px;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
+}
+.card h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 23px;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+.card h1 span { color: var(--brass); }
+.card p { margin: 0; }
+.card ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; color: var(--ivory); }
+.card ol b { color: var(--brass); font-weight: 600; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; }
+.row button { flex: 1 1 150px; min-height: 46px; }
+button.primary { background: var(--brass); border-color: var(--brass); color: var(--ink); font-weight: 600; }
+.fine { color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="view" aria-label="Игровое поле: клавиши и струны"></canvas>
+  <p id="status" role="status"></p>
+
+  <div id="bar">
+    <div class="seg" role="group" aria-label="Инструмент">
+      <button type="button" id="mPiano" aria-pressed="true">Пианино</button>
+      <button type="button" id="mStrings" aria-pressed="false">Струны</button>
+    </div>
+    <label class="sel" id="scaleWrap" for="scale" hidden>Лад
+      <select id="scale">
+        <option value="penta">Пентатоника</option>
+        <option value="major">Мажор</option>
+        <option value="minor">Минор</option>
+      </select>
+    </label>
+    <button type="button" id="camBtn">Включить камеру</button>
+    <button type="button" id="flipBtn" hidden>Другая камера</button>
+  </div>
+
+  <section id="intro" aria-labelledby="introTitle">
+    <div class="card">
+      <h1 id="introTitle">Воздушный <span>инструмент</span></h1>
+      <p>Камера следит за вашими руками, а пальцы играют прямо в воздухе.</p>
+      <ol>
+        <li><b>Пианино.</b> Клавиши висят сверху. Поднимите палец к клавише, чтобы нажать, и опустите, чтобы отпустить.</li>
+        <li><b>Струны.</b> Проведите пальцами поперёк струн. Чем быстрее движение, тем громче звук.</li>
+      </ol>
+      <div class="row">
+        <button type="button" id="startCam" class="primary">Включить камеру</button>
+        <button type="button" id="startTouch">Играть без камеры</button>
+      </div>
+      <p class="fine">Видео обрабатывается на вашем устройстве и никуда не отправляется. Без камеры можно играть касанием или мышью.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+'use strict';
+
+const MP_VERSION = '0.10.14';
+const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + MP_VERSION;
+const MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+const $ = id => document.getElementById(id);
+const stage = $('stage'), video = $('cam'), canvas = $('view'), g = canvas.getContext('2d');
+const statusEl = $('status'), bar = $('bar'), intro = $('intro');
+const mPiano = $('mPiano'), mStrings = $('mStrings'), scaleWrap = $('scaleWrap'), scaleSel = $('scale');
+const camBtn = $('camBtn'), flipBtn = $('flipBtn');
+
+const C = { ink: '#15121d', ivory: '#f4ecdd', brass: '#e7b052', teal: '#62d2c4' };
+const NOTE_RU = ['До', 'До♯', 'Ре', 'Ре♯', 'Ми', 'Фа', 'Фа♯', 'Соль', 'Соль♯', 'Ля', 'Ля♯', 'Си'];
+const TIP_IDS = [4, 8, 12, 16, 20];
+const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const SCALES = { penta: [0, 2, 4, 7, 9], major: [0, 2, 4, 5, 7, 9, 11], minor: [0, 2, 3, 5, 7, 8, 10] };
+const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let W = 0, H = 0, DPR = 1, barH = 64;
+let mode = 'piano';
+let camOn = false, camBusy = false, mirrored = true, facing = 'user';
+let landmarker = null, stream = null, lastVideoTime = -1;
+let hands = [];
+const tips = new Map();
+let statusText = null;
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+function setStatus(text, warn) {
+  const key = text + '|' + (warn ? 1 : 0);
+  if (key === statusText) return;
+  statusText = key;
+  statusEl.textContent = text;
+  statusEl.classList.toggle('warn', !!warn);
+}
+
+/* ---------- Sound ---------- */
+let ac = null, master = null, wet = null, pianoWave = null;
+const ksCache = new Map();
+
+function impulse(sec) {
+  const sr = ac.sampleRate, len = Math.floor(sr * sec), buf = ac.createBuffer(2, len, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
+  }
+  return buf;
+}
+
+function audio() {
+  if (ac) {
+    if (ac.state === 'suspended') ac.resume().catch(() => {});
+    return ac;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  try { ac = new AC({ latencyHint: 'interactive' }); } catch (e) { ac = new AC(); }
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
+  comp.connect(ac.destination);
+  master = ac.createGain(); master.gain.value = 0.9; master.connect(comp);
+  const conv = ac.createConvolver(); conv.buffer = impulse(2.4);
+  wet = ac.createGain(); wet.gain.value = 0.2; wet.connect(conv); conv.connect(comp);
+  const n = 14, re = new Float32Array(n), im = new Float32Array(n);
+  for (let k = 1; k < n; k++) im[k] = Math.pow(k, -1.6) * (k % 2 ? 1 : 0.7);
+  pianoWave = ac.createPeriodicWave(re, im);
+  if (ac.state === 'suspended') ac.resume().catch(() => {});
+  return ac;
+}
+
+function pianoOn(midi, vel) {
+  const a = audio();
+  if (!a) return null;
+  const t = a.currentTime, f = mtof(midi);
+  const out = a.createGain();
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass'; lp.Q.value = 0.6;
+  lp.frequency.setValueAtTime(Math.min(f * (4 + vel * 7), 13000), t);
+  lp.frequency.exponentialRampToValueAtTime(Math.max(f * 1.8, 500), t + 1.4);
+  const oscs = [0, 4].map(cents => {
+    const o = a.createOscillator();
+    o.setPeriodicWave(pianoWave);
+    o.frequency.value = f;
+    o.detune.value = cents;
+    o.connect(lp);
+    o.start(t);
+    return o;
+  });
+  const peak = 0.3 * vel;
+  out.gain.setValueAtTime(0.0001, t);
+  out.gain.linearRampToValueAtTime(peak, t + 0.006);
+  out.gain.exponentialRampToValueAtTime(peak * 0.42, t + 0.35);
+  out.gain.exponentialRampToValueAtTime(0.0006, t + 5);
+  lp.connect(out); out.connect(master); out.connect(wet);
+  oscs.forEach(o => o.stop(t + 5.1));
+  let stopped = false;
+  return {
+    stop(fast) {
+      if (stopped) return;
+      stopped = true;
+      const now = a.currentTime;
+      if (out.gain.cancelAndHoldAtTime) out.gain.cancelAndHoldAtTime(now);
+      else { const v = out.gain.value; out.gain.cancelScheduledValues(now); out.gain.setValueAtTime(v, now); }
+      out.gain.setTargetAtTime(0, now, fast ? 0.025 : 0.09);
+      oscs.forEach(o => { try { o.stop(now + (fast ? 0.2 : 0.7)); } catch (e) {} });
+    }
+  };
+}
+
+/* Plucked string (Karplus-Strong), rendered once per note and cached */
+function ksBuffer(midi) {
+  let e = ksCache.get(midi);
+  if (e) return e;
+  const sr = ac.sampleRate, f = mtof(midi);
+  const N = Math.max(2, Math.round(sr / f - 0.5));
+  const t60 = clamp(4 * Math.pow(130 / f, 0.4), 1.5, 4.5);
+  const loss = Math.exp(-6.9 / (f * t60));
+  const len = Math.floor(sr * t60);
+  const buf = ac.createBuffer(1, len, sr), d = buf.getChannelData(0), ring = new Float32Array(N);
+  let prev = 0, mean = 0;
+  for (let i = 0; i < N; i++) { prev = prev * 0.45 + (Math.random() * 2 - 1) * 0.55; ring[i] = prev; mean += prev; }
+  mean /= N;
+  for (let i = 0; i < N; i++) ring[i] -= mean;
+  let idx = 0, peak = 0;
+  for (let i = 0; i < len; i++) {
+    const nx = idx + 1 === N ? 0 : idx + 1, v = ring[idx];
+    d[i] = v;
+    if (Math.abs(v) > peak) peak = Math.abs(v);
+    ring[idx] = loss * 0.5 * (v + ring[nx]);
+    idx = nx;
+  }
+  const norm = peak > 0 ? 0.9 / peak : 1, fade = Math.floor(sr * 0.04);
+  for (let i = 0; i < len; i++) d[i] *= norm * (i > len - fade ? (len - i) / fade : 1);
+  e = { buf, rate: f * (N + 0.5) / sr };
+  ksCache.set(midi, e);
+  return e;
+}
+
+function pluck(i, vel, delay) {
+  const s = strings[i], now = performance.now();
+  if (!s || now - s.last < 110) return;
+  s.last = now;
+  s.amp = Math.min(1, 0.4 + vel * 0.6);
+  const a = audio();
+  if (!a) return;
+  const kb = ksBuffer(s.midi);
+  const src = a.createBufferSource();
+  src.buffer = kb.buf; src.playbackRate.value = kb.rate;
+  const gn = a.createGain(); gn.gain.value = 0.22 + vel * 0.6;
+  src.connect(gn);
+  let out = gn;
+  if (a.createStereoPanner) {
+    const p = a.createStereoPanner();
+    p.pan.value = clamp((s.x / W - 0.5) * 1.3, -1, 1);
+    gn.connect(p); out = p;
+  }
+  out.connect(master); out.connect(wet);
+  src.start(a.currentTime + (delay || 0));
+}
+
+/* ---------- Instruments ---------- */
+let keys = [], whiteCount = 8, band = { h: 200 };
+let strings = [], sTop = 0, sBot = 0;
+
+function buildPiano() {
+  whiteCount = W < 620 ? 8 : W < 1000 ? 12 : 15;
+  const start = whiteCount === 8 ? 60 : 48;
+  band.h = clamp(H * 0.36, 130, 330);
+  const ww = W / whiteCount, steps = [0, 2, 4, 5, 7, 9, 11];
+  keys = [];
+  for (let i = 0; i < whiteCount; i++) {
+    keys.push({ midi: start + 12 * Math.floor(i / 7) + steps[i % 7], black: false, x: i * ww, w: ww, h: band.h, on: 0, glow: 0 });
+  }
+  for (let i = 0; i < whiteCount - 1; i++) {
+    const s = i % 7;
+    if (s === 2 || s === 6) continue;
+    const bw = ww * 0.58;
+    keys.push({ midi: keys[i].midi + 1, black: true, x: (i + 1) * ww - bw / 2, w: bw, h: band.h * 0.6, on: 0, glow: 0 });
+  }
+}
+
+function hitKey(x, y) {
+  for (let i = whiteCount; i < keys.length; i++) {
+    const k = keys[i];
+    if (y < k.h && x >= k.x && x <= k.x + k.w) return k;
+  }
+  return keys[clamp(Math.floor(x / (W / whiteCount)), 0, whiteCount - 1)];
+}
+
+function buildStrings() {
+  const n = W < 620 ? 9 : W < 1000 ? 12 : 15;
+  const sc = SCALES[scaleSel.value] || SCALES.penta;
+  const base = n === 9 ? 55 : 48;
+  sTop = Math.max(30, H * 0.07);
+  sBot = Math.max(sTop + 120, H - barH - 112);
+  const m = Math.max(26, W * 0.08);
+  strings = [];
+  for (let i = 0; i < n; i++) {
+    strings.push({
+      midi: base + 12 * Math.floor(i / sc.length) + sc[i % sc.length],
+      x: m + (W - 2 * m) * i / (n - 1),
+      amp: 0, last: 0
+    });
+  }
+}
+
+function pressKey(t, key, vel) {
+  t.key = key;
+  key.on++; key.glow = 1;
+  t.voice = pianoOn(key.midi, vel);
+}
+function releaseKey(t, fast) {
+  if (!t.key) return;
+  t.key.on = Math.max(0, t.key.on - 1);
+  if (t.voice) t.voice.stop(fast);
+  t.key = null; t.voice = null;
+}
+function dropTip(id) {
+  const t = tips.get(id);
+  if (!t) return;
+  releaseKey(t);
+  tips.delete(id);
+}
+function resetPlay() {
+  tips.forEach(t => { releaseKey(t); t.sides = null; });
+  keys.forEach(k => { k.on = 0; });
+}
+
+function setTip(id, x, y, now, color, src) {
+  let t = tips.get(id);
+  if (!t) {
+    t = { id, x, y, vx: 0, vy: 0, t: now, color, src, key: null, voice: null, sides: null };
+    tips.set(id, t);
+  } else {
+    const a = src === 'cam' ? 0.7 : 1;
+    const nx = t.x + (x - t.x) * a, ny = t.y + (y - t.y) * a;
+    const dt = Math.max(4, now - t.t);
+    t.vx = (nx - t.x) / dt * 1000; t.vy = (ny - t.y) / dt * 1000;
+    t.x = nx; t.y = ny; t.t = now; t.color = color;
+  }
+  t.seen = now;
+  return t;
+}
+
+function processTip(t) {
+  if (mode === 'piano') {
+    const edge = band.h, hyst = Math.max(10, H * 0.02);
+    if (!t.key) {
+      if (t.y < edge && t.y > -60 && t.x >= 0 && t.x <= W) {
+        const vel = t.src === 'ptr' ? 0.8 : clamp(0.45 + (-t.vy) / (H * 2.2), 0.4, 1);
+        pressKey(t, hitKey(t.x, t.y), vel);
+      }
+      return;
+    }
+    if (t.y > edge + hyst) { releaseKey(t); return; }
+    const k = t.key, m = k.w * 0.12;
+    const hk = hitKey(t.x, Math.min(t.y, edge - 1));
+    if (hk !== k && (t.x < k.x - m || t.x > k.x + k.w + m || (!k.black && hk.black))) {
+      releaseKey(t, true);
+      pressKey(t, hk, 0.65);
+    }
+    return;
+  }
+  if (!t.sides || t.sides.length !== strings.length) {
+    t.sides = strings.map(s => (t.x < s.x ? -1 : 1));
+    return;
+  }
+  const d = Math.max(5, W * 0.007);
+  const inY = t.y > sTop - 14 && t.y < sBot + 14;
+  const hits = [];
+  for (let i = 0; i < strings.length; i++) {
+    const sx = strings[i].x, side = t.sides[i];
+    const ns = t.x < sx - d ? -1 : t.x > sx + d ? 1 : side;
+    if (ns !== side) { t.sides[i] = ns; if (inY) hits.push(i); }
+  }
+  if (hits.length) {
+    const vel = clamp(0.3 + Math.abs(t.vx) / (W * 3), 0.3, 1);
+    if (t.vx < 0) hits.reverse();
+    hits.forEach((i, n) => pluck(i, vel, n * 0.014));
+  }
+}
+
+/* ---------- Camera and hand tracking ---------- */
+function toScreen(p) {
+  const vw = video.videoWidth || W, vh = video.videoHeight || H;
+  const s = Math.max(W / vw, H / vh), dw = vw * s, dh = vh * s;
+  let x = (W - dw) / 2 + p.x * dw;
+  if (mirrored) x = W - x;
+  return { x, y: (H - dh) / 2 + p.y * dh };
+}
+
+function updateFromCamera(res, now) {
+  hands = [];
+  const lms = res.landmarks || [], hd = res.handedness || res.handednesses || [];
+  const used = {};
+  lms.forEach((lm, hi) => {
+    let label = (hd[hi] && hd[hi][0] && hd[hi][0].categoryName) || ('H' + hi);
+    if (used[label]) label += '2';
+    used[label] = 1;
+    const color = label.indexOf('Left') === 0 ? C.teal : C.brass;
+    const pts = lm.map(toScreen);
+    hands.push({ pts, color });
+    TIP_IDS.forEach(ti => setTip('cam:' + label + ':' + ti, pts[ti].x, pts[ti].y, now, color, 'cam'));
+  });
+}
+
+async function loadLandmarker() {
+  const vision = await import(MP_BASE + '/vision_bundle.mjs');
+  const fileset = await vision.FilesetResolver.forVisionTasks(MP_BASE + '/wasm');
+  const make = delegate => vision.HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MP_MODEL, delegate },
+    runningMode: 'VIDEO',
+    numHands: 2,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+  try { return await make('GPU'); } catch (e) { return await make('CPU'); }
+}
+
+function stopStream() {
+  if (stream) stream.getTracks().forEach(tr => tr.stop());
+  stream = null;
+  video.srcObject = null;
+}
+
+function stopCamera() {
+  stopStream();
+  camOn = false;
+  hands = [];
+  [...tips.keys()].forEach(id => { if (id.indexOf('cam:') === 0) dropTip(id); });
+  stage.classList.remove('cam-on');
+  camBtn.textContent = 'Включить камеру';
+  flipBtn.hidden = true;
+}
+
+async function startCamera() {
+  if (camBusy) return;
+  audio();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('Здесь камера недоступна. Откройте страницу в Chrome или Safari по https-ссылке или с компьютера. Пока можно играть касанием.', true);
+    return;
+  }
+  camBusy = true; camBtn.disabled = true;
+  setStatus('Запрашиваю доступ к камере…');
+  try {
+    stopStream();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    const st = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
+    mirrored = st.facingMode ? st.facingMode !== 'environment' : facing === 'user';
+    video.classList.toggle('mirror', mirrored);
+  } catch (e) {
+    stopCamera();
+    const name = e && e.name;
+    setStatus(
+      name === 'NotAllowedError' || name === 'SecurityError'
+        ? 'Нет доступа к камере. Разрешите камеру для этой страницы в браузере и нажмите «Включить камеру» ещё раз. Пока можно играть касанием.'
+        : name === 'NotFoundError' || name === 'OverconstrainedError'
+          ? 'Камера не найдена. Подключите камеру или играйте касанием.'
+          : 'Не получилось запустить камеру. Закройте другие программы, которые её используют, и попробуйте ещё раз.',
+      true);
+    camBusy = false; camBtn.disabled = false;
+    return;
+  }
+  if (!landmarker) {
+    setStatus('Загружаю распознавание рук, это занимает несколько секунд…');
+    try {
+      landmarker = await loadLandmarker();
+    } catch (e) {
+      stopCamera();
+      setStatus('Не удалось загрузить распознавание рук. Проверьте интернет и нажмите «Включить камеру» ещё раз.', true);
+      camBusy = false; camBtn.disabled = false;
+      return;
+    }
+  }
+  camOn = true; lastVideoTime = -1;
+  stage.classList.add('cam-on');
+  camBtn.textContent = 'Выключить камеру';
+  camBusy = false; camBtn.disabled = false;
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    flipBtn.hidden = devs.filter(d => d.kind === 'videoinput').length < 2;
+  } catch (e) { flipBtn.hidden = true; }
+}
+
+/* ---------- Drawing ---------- */
+function roundRectPath(x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x, y); g.lineTo(x + w, y);
+  g.lineTo(x + w, y + h - r); g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  g.lineTo(x + r, y + h); g.quadraticCurveTo(x, y + h, x, y + h - r);
+  g.closePath();
+}
+
+function drawPiano() {
+  const ww = W / whiteCount;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    k.glow = k.on ? 1 : k.glow * 0.88;
+    if (k.black) continue;
+    roundRectPath(k.x + 1, 0, k.w - 2, k.h, Math.min(9, ww * 0.18));
+    g.fillStyle = camOn ? 'rgba(244,236,221,.86)' : C.ivory;
+    g.fill();
+    if (k.glow > 0.02) { g.globalAlpha = k.glow * 0.9; g.fillStyle = C.brass; g.fill(); g.globalAlpha = 1; }
+    if (ww >= 30) {
+      g.fillStyle = 'rgba(21,18,29,.62)';
+      g.font = '500 ' + Math.round(clamp(ww * 0.24, 10, 14)) + 'px "Golos Text", system-ui, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+      g.fillText(NOTE_RU[k.midi % 12], k.x + k.w / 2, k.h - 12);
+    }
+  }
+  for (let i = whiteCount; i < keys.length; i++) {
+    const k = keys[i];
+    roundRectPath(k.x, 0, k.w, k.h, Math.min(6, k.w * 0.2));
+    g.fillStyle = C.ink; g.fill();
+    if (k.glow > 0.02) { g.globalAlpha = k.glow * 0.85; g.fillStyle = C.teal; g.fill(); g.globalAlpha = 1; }
+    g.strokeStyle = 'rgba(244,236,221,.22)'; g.lineWidth = 1; g.stroke();
+  }
+  g.fillStyle = C.brass;
+  g.fillRect(0, band.h, W, 2);
+}
+
+function drawStrings(now) {
+  g.strokeStyle = 'rgba(244,236,221,.3)'; g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(strings[0].x - 14, sTop); g.lineTo(strings[strings.length - 1].x + 14, sTop);
+  g.moveTo(strings[0].x - 14, sBot); g.lineTo(strings[strings.length - 1].x + 14, sBot);
+  g.stroke();
+  const n = strings.length, showNames = (strings[1].x - strings[0].x) >= 30;
+  for (let i = 0; i < n; i++) {
+    const s = strings[i];
+    s.amp *= 0.955;
+    const wob = calm ? 0 : s.amp * 13 * Math.sin(now * 0.055 + i * 1.7);
+    g.beginPath();
+    g.moveTo(s.x, sTop);
+    g.quadraticCurveTo(s.x + wob * 2, (sTop + sBot) / 2, s.x, sBot);
+    g.lineWidth = 3.4 - 2.2 * (i / (n - 1)) + s.amp * 1.5;
+    g.strokeStyle = C.brass;
+    g.globalAlpha = 0.6 + Math.min(0.4, s.amp);
+    g.stroke();
+    g.globalAlpha = 1;
+    g.fillStyle = C.ivory;
+    g.beginPath(); g.arc(s.x, sTop, 3.5, 0, 6.283); g.arc(s.x, sBot, 3.5, 0, 6.283); g.fill();
+    if (showNames) {
+      g.fillStyle = 'rgba(244,236,221,.72)';
+      g.font = '500 12px "Golos Text", system-ui, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'top';
+      g.fillText(NOTE_RU[s.midi % 12], s.x, sBot + 9);
+    }
+  }
+}
+
+function drawHands() {
+  g.lineCap = 'round';
+  hands.forEach(h => {
+    g.strokeStyle = h.color; g.globalAlpha = 0.45; g.lineWidth = 2;
+    g.beginPath();
+    BONES.forEach(b => { g.moveTo(h.pts[b[0]].x, h.pts[b[0]].y); g.lineTo(h.pts[b[1]].x, h.pts[b[1]].y); });
+    g.stroke();
+    g.globalAlpha = 1;
+  });
+  tips.forEach(t => {
+    const active = !!t.key;
+    g.beginPath(); g.arc(t.x, t.y, active ? 11 : 7, 0, 6.283);
+    g.fillStyle = t.color; g.globalAlpha = t.src === 'ptr' ? 0.55 : 0.95; g.fill();
+    g.globalAlpha = 1;
+    g.lineWidth = 2; g.strokeStyle = C.ink; g.stroke();
+    if (active) {
+      g.beginPath(); g.arc(t.x, t.y, 17, 0, 6.283);
+      g.strokeStyle = t.color; g.globalAlpha = 0.6; g.stroke(); g.globalAlpha = 1;
+    }
+  });
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!W || !H) return;
+  if (camOn && landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    let res = null;
+    try { res = landmarker.detectForVideo(video, now); } catch (e) { res = null; }
+    if (res) updateFromCamera(res, now);
+  }
+  tips.forEach((t, id) => {
+    if (t.src === 'cam' && now - t.seen > 220) { dropTip(id); return; }
+    processTip(t);
+  });
+  if (camOn && !statusEl.classList.contains('warn')) {
+    setStatus(!hands.length ? 'Покажите руки камере'
+      : mode === 'piano' ? 'Поднимите палец к клавише, чтобы сыграть'
+      : 'Проведите пальцами поперёк струн');
+  }
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, W, H);
+  if (camOn) { g.fillStyle = 'rgba(21,18,29,.46)'; g.fillRect(0, 0, W, H); }
+  if (mode === 'piano') drawPiano(); else drawStrings(now);
+  drawHands();
+}
+
+/* ---------- Layout, controls, touch ---------- */
+function layout() {
+  const r = stage.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  W = r.width; H = r.height;
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  barH = bar.getBoundingClientRect().height || 64;
+  stage.style.setProperty('--bar-h', barH + 'px');
+  resetPlay();
+  buildPiano(); buildStrings();
+}
+
+function setMode(m) {
+  mode = m;
+  resetPlay();
+  mPiano.setAttribute('aria-pressed', String(m === 'piano'));
+  mStrings.setAttribute('aria-pressed', String(m === 'strings'));
+  scaleWrap.hidden = m !== 'strings';
+  if (!camOn) touchHint();
+  requestAnimationFrame(layout);
+}
+
+function touchHint() {
+  setStatus(mode === 'piano' ? 'Камера выключена. Нажимайте клавиши пальцем или мышью.'
+    : 'Камера выключена. Ведите пальцем или мышью поперёк струн.');
+}
+
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  audio();
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  const p = pointerPos(e), now = performance.now();
+  const t = setTip('ptr:' + e.pointerId, p.x, p.y, now, C.ivory, 'ptr');
+  processTip(t);
+  if (mode === 'strings' && p.y > sTop - 14 && p.y < sBot + 14) {
+    let best = -1, bd = 18;
+    strings.forEach((s, i) => { const d = Math.abs(s.x - p.x); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0) pluck(best, 0.7, 0);
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  const id = 'ptr:' + e.pointerId;
+  if (!tips.has(id)) return;
+  const p = pointerPos(e);
+  processTip(setTip(id, p.x, p.y, performance.now(), C.ivory, 'ptr'));
+});
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
+  canvas.addEventListener(ev, e => dropTip('ptr:' + e.pointerId)));
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('pointerup', () => { if (ac && ac.state === 'suspended') ac.resume().catch(() => {}); });
+
+mPiano.addEventListener('click', () => { audio(); setMode('piano'); });
+mStrings.addEventListener('click', () => { audio(); setMode('strings'); });
+scaleSel.addEventListener('change', () => { resetPlay(); buildStrings(); });
+camBtn.addEventListener('click', () => {
+  if (camOn) { stopCamera(); touchHint(); } else startCamera();
+});
+flipBtn.addEventListener('click', () => {
+  facing = facing === 'user' ? 'environment' : 'user';
+  startCamera();
+});
+$('startCam').addEventListener('click', () => { intro.hidden = true; startCamera(); });
+$('startTouch').addEventListener('click', () => { intro.hidden = true; audio(); touchHint(); });
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) resetPlay(); });
+window.addEventListener('resize', layout);
+if (window.ResizeObserver) new ResizeObserver(layout).observe(stage);
+
+layout();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
